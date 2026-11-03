@@ -91,25 +91,51 @@ namespace EmployeeRecords
         }
 
         // Creates employees.accdb and its tables the first time the app runs, if the file isn't there yet.
+        // It checks every run, so a first run that stopped halfway (a file with no tables, so nobody
+        // can sign in) is finished on the next run instead of staying broken.
         public static void EnsureDatabase()
         {
-            if (File.Exists(DbPath))
+            if (!File.Exists(DbPath))
             {
-                return;
+                Type catalogType = Type.GetTypeFromProgID("ADOX.Catalog");
+                if (catalogType == null)
+                {
+                    throw new InvalidOperationException("ADOX.Catalog (the part of Windows that creates Access files) is not available on this PC.");
+                }
+
+                dynamic catalog = Activator.CreateInstance(catalogType);
+                catalog.Create(ConnectionString);
+                catalog.ActiveConnection.Close();
             }
 
-            dynamic catalog = Activator.CreateInstance(Type.GetTypeFromProgID("ADOX.Catalog"));
-            catalog.Create(ConnectionString);
-            catalog.ActiveConnection.Close();
-
-            Execute("CREATE TABLE Users (UserID COUNTER PRIMARY KEY, Username TEXT(50), PasswordHash TEXT(255), FullName TEXT(100), UserRole TEXT(20), IsActive YESNO, EmployeeID LONG, DateCreated DATETIME)");
-            Execute("CREATE TABLE Employees (EmployeeID COUNTER PRIMARY KEY, EmployeeNo TEXT(20), FirstName TEXT(50), LastName TEXT(50), Gender TEXT(10), BirthDate DATETIME, Email TEXT(100), Phone TEXT(30), Address TEXT(255), Position TEXT(50), Department TEXT(50), HireDate DATETIME, EmploymentStatus TEXT(20), DateCreated DATETIME)");
+            if (!TableExists("Users"))
+            {
+                Execute("CREATE TABLE Users (UserID COUNTER PRIMARY KEY, Username TEXT(50), PasswordHash TEXT(255), FullName TEXT(100), UserRole TEXT(20), IsActive YESNO, EmployeeID LONG, DateCreated DATETIME)");
+            }
 
             // The first account, so an admin can sign in and create everyone else's. Change this password after the first login.
-            Execute("INSERT INTO Users (Username, PasswordHash, FullName, UserRole, IsActive, DateCreated) VALUES (?, ?, ?, ?, ?, ?)",
-                "admin", PasswordHelper.HashPassword("admin123"), "System Administrator", "Admin", true, DateTime.Now);
+            // It's added again only if there are no accounts at all, since then nobody could sign in.
+            if (GetNumber("SELECT COUNT(*) FROM Users") == 0)
+            {
+                Execute("INSERT INTO Users (Username, PasswordHash, FullName, UserRole, IsActive, DateCreated) VALUES (?, ?, ?, ?, ?, ?)",
+                    "admin", PasswordHelper.HashPassword("admin123"), "System Administrator", "Admin", true, DateTime.Now);
+            }
 
-            AddSampleEmployees();
+            if (!TableExists("Employees"))
+            {
+                Execute("CREATE TABLE Employees (EmployeeID COUNTER PRIMARY KEY, EmployeeNo TEXT(20), FirstName TEXT(50), LastName TEXT(50), Gender TEXT(10), BirthDate DATETIME, Email TEXT(100), Phone TEXT(30), Address TEXT(255), Position TEXT(50), Department TEXT(50), HireDate DATETIME, EmploymentStatus TEXT(20), DateCreated DATETIME)");
+                AddSampleEmployees();
+            }
+        }
+
+        private static bool TableExists(string name)
+        {
+            using (OleDbConnection con = GetConnection())
+            {
+                con.Open();
+                DataTable tables = con.GetOleDbSchemaTable(OleDbSchemaGuid.Tables, new object[] { null, null, name, "TABLE" });
+                return tables.Rows.Count > 0;
+            }
         }
 
         // Sample records so the dashboard and reports have something to show. Delete this call to start empty.
